@@ -10,13 +10,23 @@ def create_social_media_analyst(llm):
         current_date = state["trade_date"]
         ticker = state["company_of_interest"]
         company_name = state["company_of_interest"]
+        
+        # Get trading strategy information
+        trading_strategy = state.get("trading_strategy", "swing")
+        strategy_timeframe = state.get("strategy_timeframe", "3-10 days")
 
         tools = [
             get_news,
         ]
 
+        # Strategy-aware context
+        if trading_strategy == "intraday":
+            strategy_note = " Focus on the most recent social sentiment from the last 24 hours. Look for viral posts or sudden sentiment shifts that could impact today's trading."
+        else:
+            strategy_note = " Focus on broader social media trends and sentiment patterns over the past week that could drive price action over multiple days."
+
         system_message = (
-            "You are a social media and company specific news researcher/analyst tasked with analyzing social media posts, recent company news, and public sentiment for a specific company over the past week. You will be given a company's name your objective is to write a comprehensive long report detailing your analysis, insights, and implications for traders and investors on this company's current state after looking at social media and what people are saying about that company, analyzing sentiment data of what people feel each day about the company, and looking at recent company news. Use the get_news(query, start_date, end_date) tool to search for company-specific news and social media discussions. Try to look at all sources possible from social media to sentiment to news. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."
+            f"You are a social media and company specific news researcher/analyst for {trading_strategy.upper()} trading (timeframe: {strategy_timeframe}).{strategy_note} You are tasked with analyzing social media posts, recent company news, and public sentiment for a specific company over the past week. You will be given a company's name your objective is to write a comprehensive long report detailing your analysis, insights, and implications for traders and investors on this company's current state after looking at social media and what people are saying about that company, analyzing sentiment data of what people feel each day about the company, and looking at recent company news. Use the get_news(query, start_date, end_date) tool to search for company-specific news and social media discussions. Try to look at all sources possible from social media to sentiment to news. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."
             + """ Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read.""",
         )
 

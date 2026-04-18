@@ -10,6 +10,10 @@ def create_fundamentals_analyst(llm):
         current_date = state["trade_date"]
         ticker = state["company_of_interest"]
         company_name = state["company_of_interest"]
+        
+        # Get trading strategy information
+        trading_strategy = state.get("trading_strategy", "swing")
+        strategy_timeframe = state.get("strategy_timeframe", "3-10 days")
 
         tools = [
             get_fundamentals,
@@ -18,8 +22,14 @@ def create_fundamentals_analyst(llm):
             get_income_statement,
         ]
 
+        # Strategy-aware context
+        if trading_strategy == "intraday":
+            strategy_note = " While fundamentals don't change intraday, focus on any recent earnings, guidance updates, or significant fundamental news from the past few days that traders might be reacting to today. Keep analysis concise and focused on immediate relevance."
+        else:
+            strategy_note = " Provide thorough fundamental analysis focusing on metrics that could drive price action over the next 1-2 weeks. Consider upcoming earnings dates, valuation relative to recent price moves, and fundamental catalysts on the horizon."
+
         system_message = (
-            "You are a researcher tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."
+            f"You are a fundamental analyst for {trading_strategy.upper()} trading (timeframe: {strategy_timeframe}).{strategy_note} You are tasked with analyzing fundamental information over the past week about a company. Please write a comprehensive report of the company's fundamental information such as financial documents, company profile, basic company financials, and company financial history to gain a full view of the company's fundamental information to inform traders. Make sure to include as much detail as possible. Do not simply state the trends are mixed, provide detailed and finegrained analysis and insights that may help traders make decisions."
             + " Make sure to append a Markdown table at the end of the report to organize key points in the report, organized and easy to read."
             + " Use the available tools: `get_fundamentals` for comprehensive company analysis, `get_balance_sheet`, `get_cashflow`, and `get_income_statement` for specific financial statements.",
         )

@@ -53,6 +53,10 @@ class AgentState(MessagesState):
 
     sender: Annotated[str, "Agent that sent this message"]
 
+    # trading strategy configuration
+    trading_strategy: Annotated[str, "Trading strategy: intraday or swing"]
+    strategy_timeframe: Annotated[str, "Timeframe for the strategy (e.g., 1-day, 3-10 days)"]
+
     # research step
     market_report: Annotated[str, "Report from the Market Analyst"]
     sentiment_report: Annotated[str, "Report from the Social Media Analyst"]
