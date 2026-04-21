@@ -269,6 +269,9 @@ class TradingAgentsGraph:
 
     def reflect_and_remember(self, returns_losses):
         """Reflect on decisions and update memory based on returns."""
+        if self.curr_state is None:
+            raise ValueError("No current state available. Run propagate() before reflect_and_remember().")
+
         self.reflector.reflect_bull_researcher(
             self.curr_state, returns_losses, self.bull_memory
         )
@@ -284,6 +287,18 @@ class TradingAgentsGraph:
         self.reflector.reflect_risk_manager(
             self.curr_state, returns_losses, self.risk_manager_memory
         )
+
+        return self.get_memory_performance()
+
+    def get_memory_performance(self):
+        """Return aggregate performance summaries for all persisted memories."""
+        return {
+            "bull_memory": self.bull_memory.get_performance_summary(),
+            "bear_memory": self.bear_memory.get_performance_summary(),
+            "trader_memory": self.trader_memory.get_performance_summary(),
+            "invest_judge_memory": self.invest_judge_memory.get_performance_summary(),
+            "risk_manager_memory": self.risk_manager_memory.get_performance_summary(),
+        }
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

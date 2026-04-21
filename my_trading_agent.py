@@ -11,7 +11,7 @@ Features:
 - Interactive menu system
 - Auto-discovery framework (coming soon)
 
-Author: Paul BAUDRIER
+Author: Mathieu Lascombes
 Version: 2.0
 """
 
@@ -1464,6 +1464,304 @@ def print_previous_trade_summary(ticker: str):
 
 
 # ================================================================================
+# OUTCOME EVALUATION & LEARNING LOOP
+# ================================================================================
+# Closes the feedback loop: fetch real price movement after a trade, determine
+# if the decision was correct, write a reflection into persistent memory so the
+# agents get better on every subsequent run.
+# ================================================================================
+
+def evaluate_outcome_from_price(
+    ticker: str,
+    trade_date: str,
+    decision: str,
+    holding_days: int = 5,
+) -> Optional[Dict]:
+    """
+    Fetch actual closing-price movement and determine if the BUY/SELL was correct.
+
+    Args:
+        ticker:       Stock / crypto symbol (yfinance format)
+        trade_date:   Date of the original analysis (YYYY-MM-DD)
+        decision:     BUY / SELL / HOLD text from the agent
+        holding_days: Number of *trading* days to hold before measuring outcome
+
+    Returns:
+        Dict with status, prices, return_pct, was_correct — or None on hard error
+    """
+    import yfinance as yf
+    import pandas as pd
+    from datetime import datetime as _dt, timedelta as _td
+
+    try:
+        trade_dt = _dt.strptime(str(trade_date), "%Y-%m-%d")
+        start = (trade_dt - _td(days=5)).strftime("%Y-%m-%d")
+        end   = (trade_dt + _td(days=holding_days + 15)).strftime("%Y-%m-%d")
+
+        data = yf.Ticker(ticker.upper()).history(start=start, end=end)
+
+        if data.empty:
+            return {"status": "no_data", "reason": f"No price data for {ticker}"}
+
+        if data.index.tz is not None:
+            data.index = data.index.tz_localize(None)
+
+        available = data.index
+        trade_ts  = pd.Timestamp(trade_date)
+
+        entry_dates = available[available >= trade_ts]
+        if len(entry_dates) == 0:
+            return {"status": "no_data", "reason": "No trading day on or after analysis date"}
+
+        entry_date  = entry_dates[0]
+        entry_price = float(data.loc[entry_date, "Close"])
+
+        exit_dates = available[available > entry_date]
+        if len(exit_dates) < holding_days:
+            return {
+                "status":               "pending",
+                "ticker":               ticker,
+                "entry_date":           str(entry_date.date()),
+                "entry_price":          round(entry_price, 2),
+                "holding_days_required": holding_days,
+                "trading_days_available": len(exit_dates),
+                "reason": (
+                    f"Holding period not complete "
+                    f"({len(exit_dates)}/{holding_days} trading days elapsed)"
+                ),
+            }
+
+        exit_date  = exit_dates[min(holding_days - 1, len(exit_dates) - 1)]
+        exit_price = float(data.loc[exit_date, "Close"])
+        return_pct = ((exit_price - entry_price) / entry_price) * 100
+
+        d_upper = decision.upper().strip()
+        if "BUY" in d_upper:
+            was_correct = return_pct > 0
+        elif "SELL" in d_upper:
+            was_correct = return_pct < 0
+        else:
+            was_correct = None  # HOLD — no correctness concept
+
+        return {
+            "status":                "complete",
+            "ticker":                ticker,
+            "entry_date":            str(entry_date.date()),
+            "exit_date":             str(exit_date.date()),
+            "entry_price":           round(entry_price, 2),
+            "exit_price":            round(exit_price, 2),
+            "return_pct":            round(return_pct, 2),
+            "dollar_return_per_share": round(exit_price - entry_price, 2),
+            "was_correct":           was_correct,
+            "decision":              d_upper,
+            "holding_days":          holding_days,
+        }
+
+    except Exception as exc:
+        return {"status": "error", "reason": str(exc)}
+
+
+def load_past_state_for_reflection(ticker: str, date_str: str) -> Optional[Dict]:
+    """
+    Reload a past LangGraph state from the eval_results JSON log.
+
+    The reflector needs the full state (all analyst reports + debate histories)
+    to write meaningful lessons into memory. This function reconstructs that
+    minimal structure from the persisted log file.
+    """
+    log_path = Path(
+        f"eval_results/{ticker}/TradingAgentsStrategy_logs"
+        f"/full_states_log_{date_str}.json"
+    )
+    if not log_path.exists():
+        return None
+
+    try:
+        with open(log_path, "r", encoding="utf-8") as fh:
+            log = json.load(fh)
+
+        # Log is keyed by trade_date; fall back to first entry when only one run
+        state_data = log.get(date_str) or (list(log.values())[0] if log else None)
+        if not state_data:
+            return None
+
+        from tradingagents.agents.utils.agent_states import (
+            InvestDebateState,
+            RiskDebateState,
+        )
+
+        ids = state_data.get("investment_debate_state", {})
+        rds = state_data.get("risk_debate_state", {})
+
+        return {
+            "company_of_interest": state_data.get("company_of_interest", ticker),
+            "trade_date":          state_data.get("trade_date", date_str),
+            "market_report":       state_data.get("market_report", ""),
+            "sentiment_report":    state_data.get("sentiment_report", ""),
+            "news_report":         state_data.get("news_report", ""),
+            "fundamentals_report": state_data.get("fundamentals_report", ""),
+            "investment_plan":     state_data.get("investment_plan", ""),
+            "trader_investment_plan": state_data.get("trader_investment_decision", ""),
+            "final_trade_decision":   state_data.get("final_trade_decision", ""),
+            "investment_debate_state": InvestDebateState({
+                "history":          ids.get("history", ""),
+                "bull_history":     ids.get("bull_history", ""),
+                "bear_history":     ids.get("bear_history", ""),
+                "current_response": ids.get("current_response", ""),
+                "judge_decision":   ids.get("judge_decision", ""),
+                "count":            ids.get("count", 0),
+            }),
+            "risk_debate_state": RiskDebateState({
+                "history":                          rds.get("history", ""),
+                "aggressive_history":               rds.get("aggressive_history", ""),
+                "conservative_history":             rds.get("conservative_history", ""),
+                "neutral_history":                  rds.get("neutral_history", ""),
+                "current_aggressive_response":      rds.get("current_aggressive_response", ""),
+                "current_conservative_response":    rds.get("current_conservative_response", ""),
+                "current_neutral_response":         rds.get("current_neutral_response", ""),
+                "judge_decision":                   rds.get("judge_decision", ""),
+                "latest_speaker":                   rds.get("latest_speaker", ""),
+                "count":                            rds.get("count", 0),
+            }),
+        }
+    except Exception as exc:
+        print(f"⚠️  Could not load state from {log_path}: {exc}")
+        return None
+
+
+def reflect_on_past_trade(
+    ticker: str,
+    date_str: str,
+    holding_days: int = 5,
+) -> Optional[Dict]:
+    """
+    Full learning-loop for one past trade:
+      1. Reload saved state from eval_results log
+      2. Fetch real price outcome via yfinance
+      3. Call reflect_and_remember so all agent memories are updated
+      4. Return outcome + aggregate performance summary
+    """
+    print(f"\n📂 Loading state for {ticker} / {date_str}…")
+    past_state = load_past_state_for_reflection(ticker, date_str)
+    if not past_state:
+        print(f"❌ No saved state found.")
+        print(f"   Expected: eval_results/{ticker}/TradingAgentsStrategy_logs/"
+              f"full_states_log_{date_str}.json")
+        return None
+
+    final_decision = past_state.get("final_trade_decision", "")
+    signal = "HOLD"
+    if "BUY"  in final_decision.upper(): signal = "BUY"
+    if "SELL" in final_decision.upper(): signal = "SELL"
+
+    print(f"📊 Original decision: {signal}")
+    print(f"⏳ Fetching price outcome ({holding_days} trading days)…")
+
+    outcome = evaluate_outcome_from_price(ticker, date_str, signal, holding_days)
+
+    if outcome is None or outcome["status"] == "error":
+        reason = (outcome or {}).get("reason", "unknown error")
+        print(f"❌ Could not evaluate outcome: {reason}")
+        return None
+
+    if outcome["status"] == "pending":
+        print(f"⏳ {outcome['reason']}")
+        print(f"   Entry: {outcome['entry_date']}  ${outcome['entry_price']:.2f}")
+        return outcome
+
+    if outcome["status"] == "no_data":
+        print(f"⚠️  {outcome['reason']}")
+        return None
+
+    # ── Display outcome ──────────────────────────────────────────────────────
+    correct_str = (
+        "✅ CORRECT" if outcome["was_correct"] is True  else
+        "❌ WRONG"   if outcome["was_correct"] is False else
+        "⚪ N/A (HOLD)"
+    )
+    print(f"\n{'─'*60}")
+    print(f"  📈 TRADE OUTCOME: {ticker}")
+    print(f"{'─'*60}")
+    print(f"  Entry:  {outcome['entry_date']}  ${outcome['entry_price']:.2f}")
+    print(f"  Exit:   {outcome['exit_date']}   ${outcome['exit_price']:.2f}")
+    print(f"  Return: {outcome['return_pct']:+.2f}%   "
+          f"(${outcome['dollar_return_per_share']:+.2f} per share)")
+    print(f"  Signal: {signal}  →  {correct_str}")
+    print(f"{'─'*60}")
+
+    # ── Reflect and update memory ────────────────────────────────────────────
+    print("\n🧠 Running reflection — agents will learn from this outcome…")
+    config    = create_ollama_config()
+    ta        = TradingAgentsGraph(debug=False, config=config)
+    ta.curr_state = past_state
+    performance   = ta.reflect_and_remember(outcome["return_pct"])
+
+    print(f"✅ Memory updated for {ticker}\n")
+    return {"outcome": outcome, "performance": performance}
+
+
+def print_memory_performance_report(config: dict = None):
+    """
+    Pretty-print aggregate success rates for every agent memory component.
+    Reads the persisted JSON files directly — no LLM calls needed.
+    """
+    from tradingagents.agents.utils.memory import FinancialSituationMemory
+
+    if config is None:
+        config = create_ollama_config()
+
+    memory_names = [
+        "bull_memory",
+        "bear_memory",
+        "trader_memory",
+        "invest_judge_memory",
+        "risk_manager_memory",
+    ]
+
+    print(f"\n{'='*80}")
+    print("🧠  AGENT MEMORY PERFORMANCE".center(80))
+    print(f"{'='*80}")
+    print(
+        f"  {'Agent':<22} {'Records':>8} {'Evaluated':>10} "
+        f"{'Correct':>8} {'Success':>9} {'Avg Return':>12}"
+    )
+    print(f"  {'─'*22} {'─'*8} {'─'*10} {'─'*8} {'─'*9} {'─'*12}")
+
+    totals = {"records": 0, "evaluated": 0, "correct": 0}
+
+    for name in memory_names:
+        mem     = FinancialSituationMemory(name, config)
+        s       = mem.get_performance_summary()
+        label   = name.replace("_memory", "").replace("_", " ").title()
+        rate    = f"{s['success_rate']:.1f}%" if s["success_rate"]   is not None else "—"
+        avg_ret = f"{s['average_returns']:+.2f}%" if s["average_returns"] is not None else "—"
+
+        print(
+            f"  {label:<22} {s['total_records']:>8} {s['evaluated_records']:>10} "
+            f"{s['correct_records']:>8} {rate:>9} {avg_ret:>12}"
+        )
+        totals["records"]   += s["total_records"]
+        totals["evaluated"] += s["evaluated_records"]
+        totals["correct"]   += s["correct_records"]
+
+    print(f"  {'─'*22} {'─'*8} {'─'*10} {'─'*8} {'─'*9} {'─'*12}")
+    total_rate = (
+        f"{round(totals['correct'] / totals['evaluated'] * 100, 1)}%"
+        if totals["evaluated"] else "—"
+    )
+    print(
+        f"  {'TOTAL':<22} {totals['records']:>8} {totals['evaluated']:>10} "
+        f"{totals['correct']:>8} {total_rate:>9}"
+    )
+    print(f"{'='*80}")
+
+    # Show storage path from any memory instance
+    sample = FinancialSituationMemory("bull_memory", config)
+    print(f"  📁 Stored at: {sample.storage_dir}")
+    print()
+
+
+# ================================================================================
 # TRADING FUNCTIONS
 # ================================================================================
 # Core trading analysis functions for intraday and swing trading strategies.
@@ -1757,6 +2055,64 @@ def save_batch_results(results: Dict[str, any], filename: str = None):
 # Menu System
 # ─────────────────────────────────────────────────────────────────────────────
 
+def main_memory_and_learning():
+    """Interactive sub-menu for the persistent memory & learning loop."""
+    while True:
+        print_header("MEMORY & LEARNING LOOP")
+        print("1. 📊 Show memory performance report")
+        print("2. 🔁 Evaluate outcome for a past trade")
+        print("3. 🗑️  Clear all agent memories")
+        print("0. ↩  Back")
+        print(f"\n{'─'*80}")
+
+        choice = input("Choose option: ").strip()
+
+        if choice == "0":
+            break
+
+        elif choice == "1":
+            print_memory_performance_report()
+
+        elif choice == "2":
+            ticker = input("Ticker (e.g. AAPL, BTC-USD): ").strip().upper()
+            if not ticker:
+                print("❌ No ticker provided"); continue
+
+            date_str = input("Analysis date (YYYY-MM-DD): ").strip()
+            try:
+                from datetime import datetime as _dt2
+                _dt2.strptime(date_str, "%Y-%m-%d")
+            except ValueError:
+                print("❌ Date must be YYYY-MM-DD format"); continue
+
+            days_input = input("Holding period in trading days [5]: ").strip()
+            holding_days = int(days_input) if days_input.isdigit() else 5
+
+            reflect_on_past_trade(ticker, date_str, holding_days)
+
+        elif choice == "3":
+            confirm = input(
+                "⚠️  This will permanently erase all agent memories. "
+                "Type 'YES' to confirm: "
+            ).strip()
+            if confirm == "YES":
+                from tradingagents.agents.utils.memory import FinancialSituationMemory
+                cfg = create_ollama_config()
+                for name in [
+                    "bull_memory", "bear_memory", "trader_memory",
+                    "invest_judge_memory", "risk_manager_memory",
+                ]:
+                    FinancialSituationMemory(name, cfg).clear()
+                print("✅ All agent memories cleared.")
+            else:
+                print("Cancelled.")
+
+        else:
+            print("Invalid option. Please try again.")
+
+        input("\nPress Enter to continue…")
+
+
 def print_menu():
     """Display the main menu"""
     print_header("TRADING AGENT - MAIN MENU")
@@ -1774,6 +2130,7 @@ def print_menu():
     print("8. 🤖 Model Configuration")
     print("9. 🎛️  Analyst & Research Settings")
     print("A. 💼 Portfolio Tracking (Future Integration)")
+    print("B. 🧠 Memory & Learning")
     print("0. ❌ Exit")
     print(f"\n{'─'*80}")
 
@@ -2299,7 +2656,7 @@ def main():
     
     while True:
         print_menu()
-        choice = input("Select an option (0-9, A): ").strip().upper()
+        choice = input("Select an option (0-9, A, B): ").strip().upper()
         
         try:
             if choice == "1":
@@ -2322,6 +2679,8 @@ def main():
                 main_analyst_research_settings()
             elif choice == "A":
                 manage_portfolio_tracking()
+            elif choice == "B":
+                main_memory_and_learning()
             elif choice == "0":
                 print_header("👋 GOODBYE")
                 print("Thank you for using Trading Agent!")
@@ -2336,7 +2695,7 @@ def main():
             print(f"\n❌ Unexpected error: {e}")
         
         # Pause before showing menu again
-        if choice in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A"]:
+        if choice in ["1", "2", "3", "4", "5", "6", "7", "8", "9", "A", "B"]:
             input("\n Press Enter to continue...")
 
 # ================================================================================

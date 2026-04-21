@@ -17,14 +17,7 @@ def create_trader(llm, memory):
         strategy_timeframe = state.get("strategy_timeframe", "3-10 days")
 
         curr_situation = f"{market_research_report}\n\n{sentiment_report}\n\n{news_report}\n\n{fundamentals_report}"
-        past_memories = memory.get_memories(curr_situation, n_matches=2)
-
-        past_memory_str = ""
-        if past_memories:
-            for i, rec in enumerate(past_memories, 1):
-                past_memory_str += rec["recommendation"] + "\n\n"
-        else:
-            past_memory_str = "No past memories found."
+        past_memory_str = memory.get_prompt_context(curr_situation, n_matches=2)
 
         # Enhanced context with strategy and level requirements
         context = {

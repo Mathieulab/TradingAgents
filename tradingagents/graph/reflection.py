@@ -1,5 +1,6 @@
 # TradingAgents/graph/reflection.py
 
+from datetime import datetime, timezone
 from typing import Dict, Any
 from langchain_openai import ChatOpenAI
 
@@ -55,6 +56,29 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
 
         return f"{curr_market_report}\n\n{curr_sentiment_report}\n\n{curr_news_report}\n\n{curr_fundamentals_report}"
 
+    def _build_memory_metadata(
+        self,
+        current_state: Dict[str, Any],
+        component_type: str,
+        returns_losses,
+        analyzed_text: str,
+    ) -> Dict[str, Any]:
+        """Build structured metadata for a persisted memory record."""
+        was_correct = None
+        if isinstance(returns_losses, (int, float)):
+            was_correct = returns_losses > 0
+
+        return {
+            "component_type": component_type,
+            "company_of_interest": current_state.get("company_of_interest"),
+            "trade_date": current_state.get("trade_date"),
+            "returns_losses": returns_losses,
+            "was_correct": was_correct,
+            "final_trade_decision": current_state.get("final_trade_decision"),
+            "analyzed_text": analyzed_text,
+            "recorded_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     def _reflect_on_component(
         self, component_type: str, report: str, situation: str, returns_losses
     ) -> str:
@@ -78,7 +102,14 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         result = self._reflect_on_component(
             "BULL", bull_debate_history, situation, returns_losses
         )
-        bull_memory.add_situations([(situation, result)])
+        bull_memory.add_situations(
+            [(situation, result)],
+            [
+                self._build_memory_metadata(
+                    current_state, "BULL", returns_losses, bull_debate_history
+                )
+            ],
+        )
 
     def reflect_bear_researcher(self, current_state, returns_losses, bear_memory):
         """Reflect on bear researcher's analysis and update memory."""
@@ -88,7 +119,14 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         result = self._reflect_on_component(
             "BEAR", bear_debate_history, situation, returns_losses
         )
-        bear_memory.add_situations([(situation, result)])
+        bear_memory.add_situations(
+            [(situation, result)],
+            [
+                self._build_memory_metadata(
+                    current_state, "BEAR", returns_losses, bear_debate_history
+                )
+            ],
+        )
 
     def reflect_trader(self, current_state, returns_losses, trader_memory):
         """Reflect on trader's decision and update memory."""
@@ -98,7 +136,14 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         result = self._reflect_on_component(
             "TRADER", trader_decision, situation, returns_losses
         )
-        trader_memory.add_situations([(situation, result)])
+        trader_memory.add_situations(
+            [(situation, result)],
+            [
+                self._build_memory_metadata(
+                    current_state, "TRADER", returns_losses, trader_decision
+                )
+            ],
+        )
 
     def reflect_invest_judge(self, current_state, returns_losses, invest_judge_memory):
         """Reflect on investment judge's decision and update memory."""
@@ -108,7 +153,14 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         result = self._reflect_on_component(
             "INVEST JUDGE", judge_decision, situation, returns_losses
         )
-        invest_judge_memory.add_situations([(situation, result)])
+        invest_judge_memory.add_situations(
+            [(situation, result)],
+            [
+                self._build_memory_metadata(
+                    current_state, "INVEST JUDGE", returns_losses, judge_decision
+                )
+            ],
+        )
 
     def reflect_risk_manager(self, current_state, returns_losses, risk_manager_memory):
         """Reflect on risk manager's decision and update memory."""
@@ -118,4 +170,11 @@ Adhere strictly to these instructions, and ensure your output is detailed, accur
         result = self._reflect_on_component(
             "RISK JUDGE", judge_decision, situation, returns_losses
         )
-        risk_manager_memory.add_situations([(situation, result)])
+        risk_manager_memory.add_situations(
+            [(situation, result)],
+            [
+                self._build_memory_metadata(
+                    current_state, "RISK JUDGE", returns_losses, judge_decision
+                )
+            ],
+        )

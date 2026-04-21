@@ -25,6 +25,7 @@ from rich.rule import Rule
 
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.dataflows.outcome_tracker import OutcomeTracker
 from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
@@ -896,6 +897,67 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
+
+def show_outcomes_panel(evaluated_outcomes: list, memory_instance=None):
+    """Print a Rich panel summarising recently evaluated trade outcomes."""
+    table = Table(
+        show_header=True,
+        header_style="bold magenta",
+        box=box.SIMPLE_HEAD,
+        padding=(0, 1),
+    )
+    table.add_column("Date", style="cyan", width=12)
+    table.add_column("Ticker", style="white", width=8)
+    table.add_column("Action", justify="center", width=6)
+    table.add_column("Entry $", justify="right", width=9)
+    table.add_column("+1d $", justify="right", width=9)
+    table.add_column("Change", justify="right", width=9)
+    table.add_column("Result", justify="center", width=8)
+
+    for outcome in evaluated_outcomes:
+        action = outcome["action"]
+        action_color = "green" if action == "BUY" else "red" if action == "SELL" else "yellow"
+        was_correct = outcome["was_correct"]
+        result_str = "[green]✓ Win[/green]" if was_correct else "[red]✗ Loss[/red]"
+        change_pct = outcome["price_change_pct"]
+        change_color = "green" if change_pct > 0 else "red"
+        entry = outcome.get("price_at_decision")
+        next_p = outcome.get("next_day_price")
+        table.add_row(
+            outcome["decision_date"],
+            outcome["ticker"],
+            f"[{action_color}]{action}[/{action_color}]",
+            f"${entry:.2f}" if entry is not None else "N/A",
+            f"${next_p:.2f}" if next_p is not None else "N/A",
+            f"[{change_color}]{change_pct:+.2f}%[/{change_color}]",
+            result_str,
+        )
+
+    console.print()
+    console.print(Rule("Trade Outcome Tracking", style="bold cyan"))
+    console.print(
+        f"[bold]{len(evaluated_outcomes)} decision(s) evaluated[/bold]"
+    )
+
+    if memory_instance:
+        perf = memory_instance.get_performance_summary()
+        if perf["success_rate"] is not None:
+            sr = perf["success_rate"]
+            sr_color = "green" if sr >= 60 else "yellow" if sr >= 40 else "red"
+            console.print(
+                f"  Overall success rate: [{sr_color}]{sr}%[/{sr_color}]"
+                f" ({perf['correct_records']}/{perf['evaluated_records']} correct)"
+            )
+        if perf["average_returns"] is not None:
+            avg_color = "green" if perf["average_returns"] > 0 else "red"
+            console.print(
+                f"  Avg next-day return: [{avg_color}]{perf['average_returns']:+.4f}%[/{avg_color}]"
+            )
+
+    console.print(table)
+    console.print()
+
+
 def run_analysis():
     # First get all user selections
     selections = get_user_selections()
@@ -979,6 +1041,22 @@ def run_analysis():
     message_buffer.add_message = save_message_decorator(message_buffer, "add_message")
     message_buffer.add_tool_call = save_tool_call_decorator(message_buffer, "add_tool_call")
     message_buffer.update_report_section = save_report_section_decorator(message_buffer, "update_report_section")
+
+    # Evaluate any pending trade outcomes from previous runs.
+    tracker = OutcomeTracker(results_dir=config["results_dir"])
+    try:
+        evaluated_outcomes = tracker.evaluate_pending(memory_instance=graph.trader_memory)
+        if evaluated_outcomes:
+            show_outcomes_panel(evaluated_outcomes, memory_instance=graph.trader_memory)
+        else:
+            pending_count = len(tracker.get_pending_outcomes())
+            if pending_count > 0:
+                console.print(
+                    f"[dim]⏳ {pending_count} pending outcome(s) not yet ready for evaluation "
+                    "(need at least 1 day of price data).[/dim]\n"
+                )
+    except Exception as _outcome_err:
+        console.print(f"[dim]Outcome evaluation skipped: {_outcome_err}[/dim]\n")
 
     # Now start the display layout
     layout = create_layout()
@@ -1140,6 +1218,22 @@ def run_analysis():
                 message_buffer.update_report_section(section, final_state[section])
 
         update_display(layout, stats_handler=stats_handler, start_time=start_time)
+
+    # Record this decision as a pending outcome so it can be evaluated next run.
+    try:
+        situation_summary = final_state.get("final_trade_decision", "") or ""
+        tracker.record_pending(
+            ticker=selections["ticker"],
+            date=selections["analysis_date"],
+            action=decision,
+            situation_summary=situation_summary,
+        )
+        console.print(
+            f"[dim]Decision [bold]{decision}[/bold] for {selections['ticker']} recorded — "
+            "outcome will be evaluated on the next run.[/dim]"
+        )
+    except Exception as _rec_err:
+        console.print(f"[dim]Could not record outcome: {_rec_err}[/dim]")
 
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
