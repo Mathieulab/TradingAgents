@@ -21,6 +21,13 @@ def create_trader(llm):
     structured_llm = bind_structured(llm, TraderProposal, "Trader")
 
     def trader_node(state, name):
+        if state.get("astra_snapshot"):
+            from finance_lab.astra.catalog import canonical
+            from tradingagents.integrations.astra_context import swing_proposal
+            proposal, error = swing_proposal(llm, state, "Trader")
+            plan = canonical(proposal)
+            return {"messages": [AIMessage(content=plan)], "trader_investment_plan": plan,
+                    "sender": name, "astra_trader_proposal": proposal, "astra_proposal_error": error}
         company_name = state["company_of_interest"]
         instrument_context = get_instrument_context_from_state(state)
         investment_plan = state["investment_plan"]

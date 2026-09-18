@@ -1,0 +1,7 @@
+backtrader==1.9.78.123
+numpy>=1.26,<3
+pandas>=2.3,<4
+rich>=14,<16
+textual>=8.2,<9
+textual-plotext==1.0.1
+tzdata>=2025.2

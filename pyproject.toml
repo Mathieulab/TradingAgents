@@ -34,6 +34,21 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+astra = [
+    "nautilus_trader==1.231.0; python_version >= '3.12' and python_version < '3.15'",
+    "MetaTrader5==5.0.6180; platform_system == 'Windows' and python_version >= '3.12' and python_version < '3.15'",
+    "pydantic>=2.10,<3",
+    "textual>=8.2,<9",
+    "textual-plotext==1.0.1",
+    "tzdata>=2025.2",
+]
+ftmo = [
+    "backtrader==1.9.78.123",
+    "numpy>=1.26,<3",
+    "textual>=8.2,<9",
+    "textual-plotext==1.0.1",
+    "tzdata>=2025.2",
+]
 dev = [
     "ruff>=0.15",
     "pytest>=8.0",
@@ -44,15 +59,23 @@ dev = [
 bedrock = [
     "langchain-aws>=1.5.0",
 ]
+mcp = [
+    "mcp>=1.27.0",
+]
+nautilus = [
+    "nautilus_trader>=1.228.0,<2; python_version >= '3.12'",
+]
 
 [project.scripts]
 tradingagents = "cli.main:app"
+finance-ftmo = "finance_lab.ftmo.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["tradingagents*", "cli*"]
+include = ["tradingagents*", "cli*", "finance_lab*"]
 
 [tool.setuptools.package-data]
 cli = ["static/*"]
+finance_lab = ["storage/*.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

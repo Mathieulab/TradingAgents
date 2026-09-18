@@ -2,6 +2,7 @@ from typing import Annotated
 
 from langchain_core.tools import tool
 
+from tradingagents.dataflows.config import get_config
 from tradingagents.dataflows.market_data_validator import build_verified_market_snapshot
 
 
@@ -20,4 +21,8 @@ def get_verified_market_snapshot(
     price levels, Bollinger bands, RSI, MACD, moving averages, support /
     resistance, or historical comparisons, and treat it as the source of truth.
     """
+    config = get_config()
+    as_of = config.get("analysis_as_of_date")
+    if config.get("strict_as_of_date", True) and isinstance(as_of, str) and as_of:
+        curr_date = min(str(curr_date), as_of)
     return build_verified_market_snapshot(symbol, curr_date, look_back_days)

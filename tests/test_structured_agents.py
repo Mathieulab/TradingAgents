@@ -318,6 +318,14 @@ def _structured_sentiment_llm(captured: dict, report: SentimentReport | None = N
 
 @pytest.mark.unit
 class TestSentimentAnalystAgent:
+    @pytest.fixture(autouse=True)
+    def offline_sources(self, monkeypatch):
+        # These tests exercise the LLM schema/fallback, not public-source availability.
+        prefix = "tradingagents.agents.analysts.sentiment_analyst"
+        monkeypatch.setattr(f"{prefix}.get_news.func", lambda *a, **k: "News unavailable (fixture)")
+        monkeypatch.setattr(f"{prefix}.fetch_stocktwits_messages", lambda *a, **k: "Stocktwits unavailable (fixture)")
+        monkeypatch.setattr(f"{prefix}.fetch_reddit_posts", lambda *a, **k: "Reddit unavailable (fixture)")
+
     def test_structured_path_produces_rendered_markdown(self):
         captured = {}
         report = SentimentReport(

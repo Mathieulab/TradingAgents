@@ -1,9 +1,9 @@
-import os
+﻿import os
 
 _TRADINGAGENTS_HOME = os.path.join(os.path.expanduser("~"), ".tradingagents")
 
-# Single source of truth for env-var → config-key overrides. To expose
-# a new config key for environment-based override, add a row here — no
+# Single source of truth for env-var â†’ config-key overrides. To expose
+# a new config key for environment-based override, add a row here â€” no
 # entry-point script changes required. Coercion is driven by the type
 # of the existing default, so users can keep writing plain strings in
 # their .env file.
@@ -18,6 +18,24 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_CHECKPOINT_ENABLED":   "checkpoint_enabled",
     "TRADINGAGENTS_BENCHMARK_TICKER":     "benchmark_ticker",
     "TRADINGAGENTS_TEMPERATURE":          "temperature",
+    "TRADINGAGENTS_FINANCE_MCP_ENABLED":  "finance_mcp_enabled",
+    "TRADINGAGENTS_FINANCE_MCP_URL":      "finance_mcp_url",
+    "TRADINGAGENTS_FINANCE_MEMORY_ENABLED": "finance_memory_enabled",
+    "TRADINGAGENTS_FINANCE_MEMORY_PATH":  "finance_memory_path",
+    "TRADINGAGENTS_FINANCE_BACKTEST_ENABLED": "finance_backtest_enabled",
+    "TRADINGAGENTS_FINANCE_BACKTEST_MODE": "finance_backtest_mode",
+    "TRADINGAGENTS_FINANCE_BACKTEST_BACKEND": "finance_backtest_backend",
+    "TRADINGAGENTS_FINANCE_BACKTEST_STRATEGY": "finance_backtest_strategy",
+    "TRADINGAGENTS_FINANCE_BACKTEST_BENCHMARK": "finance_backtest_benchmark",
+    "TRADINGAGENTS_FINANCE_BACKTEST_HORIZONS": "finance_backtest_horizons",
+    "TRADINGAGENTS_FINANCE_BACKTEST_LOOKBACK_DAYS": "finance_backtest_lookback_days",
+    "TRADINGAGENTS_FINANCE_BACKTEST_INITIAL_CASH": "finance_backtest_initial_cash",
+    "TRADINGAGENTS_FINANCE_BACKTEST_FAST_PERIOD": "finance_backtest_fast_period",
+    "TRADINGAGENTS_FINANCE_BACKTEST_SLOW_PERIOD": "finance_backtest_slow_period",
+    "TRADINGAGENTS_FINANCE_BACKTEST_FEE_BPS": "finance_backtest_fee_bps",
+    "TRADINGAGENTS_FINANCE_BACKTEST_SLIPPAGE_BPS": "finance_backtest_slippage_bps",
+    "TRADINGAGENTS_CHART_OUTPUT_DIR":     "chart_output_dir",
+    "TRADINGAGENTS_STRICT_AS_OF_DATE":     "strict_as_of_date",
 }
 
 
@@ -47,6 +65,8 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "results_dir": os.getenv("TRADINGAGENTS_RESULTS_DIR", os.path.join(_TRADINGAGENTS_HOME, "logs")),
     "data_cache_dir": os.getenv("TRADINGAGENTS_CACHE_DIR", os.path.join(_TRADINGAGENTS_HOME, "cache")),
     "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
+    "finance_memory_path": os.path.join(_TRADINGAGENTS_HOME, "finance", "finance_memory.db"),
+    "chart_output_dir": os.path.join(_TRADINGAGENTS_HOME, "charts"),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
@@ -73,6 +93,24 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Checkpoint/resume: when True, LangGraph saves state after each node
     # so a crashed run can resume from the last successful step.
     "checkpoint_enabled": False,
+    # Finance Lab research memory and replay are on by default; MCP is opt-in.
+    "finance_mcp_enabled": False,
+    "finance_mcp_url": "http://localhost:8765",
+    "finance_memory_enabled": True,
+    "finance_backtest_enabled": True,
+    "finance_backtest_mode": "decision_replay",
+    "finance_backtest_backend": "simple",
+    "finance_backtest_strategy": "buy_and_hold",
+    "finance_backtest_benchmark": "QQQ",
+    "finance_backtest_horizons": "1,2,5,10,20,60,120",
+    "finance_backtest_lookback_days": 365,
+    "finance_backtest_initial_cash": 10000.0,
+    "finance_backtest_fast_period": 12,
+    "finance_backtest_slow_period": 26,
+    "finance_backtest_fee_bps": 0.0,
+    "finance_backtest_slippage_bps": 0.0,
+    "analysis_as_of_date": None,
+    "strict_as_of_date": True,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
@@ -98,7 +136,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
     ],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
-    # The configured value is the exact vendor chain — requests are NOT silently
+    # The configured value is the exact vendor chain â€” requests are NOT silently
     # routed to vendors you didn't choose. For ordered fallback, list several,
     # e.g. "yfinance,alpha_vantage". "default" uses all available vendors.
     "data_vendors": {

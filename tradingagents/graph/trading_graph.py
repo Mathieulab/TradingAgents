@@ -27,6 +27,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_verified_market_snapshot,
     resolve_instrument_identity,
 )
+from tradingagents.agents.utils.macro_data_tools import macro_indicators_available
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.dataflows.config import set_config
 from tradingagents.dataflows.utils import safe_ticker_component
@@ -111,6 +112,7 @@ class TradingAgentsGraph:
             self.tool_nodes,
             self.conditional_logic,
             analyst_concurrency_limit=self.config.get("analyst_concurrency_limit", 1),
+            snapshot_only=self.config.get("astra_snapshot_only", False),
         )
 
         self.propagator = Propagator(
@@ -160,6 +162,16 @@ class TradingAgentsGraph:
 
     def _create_tool_nodes(self) -> dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
+        news_tools = [
+            # News and insider information
+            get_news,
+            get_global_news,
+            get_insider_transactions,
+            get_prediction_markets,
+        ]
+        if macro_indicators_available():
+            news_tools.insert(3, get_macro_indicators)
+
         return {
             "market": ToolNode(
                 [
@@ -179,16 +191,7 @@ class TradingAgentsGraph:
                     get_news,
                 ]
             ),
-            "news": ToolNode(
-                [
-                    # News and insider information
-                    get_news,
-                    get_global_news,
-                    get_insider_transactions,
-                    get_macro_indicators,
-                    get_prediction_markets,
-                ]
-            ),
+            "news": ToolNode(news_tools),
             "fundamentals": ToolNode(
                 [
                     # Fundamental analysis tools
@@ -306,6 +309,35 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
+    def prepare_past_context(self, ticker: str) -> str:
+        """Resolve and combine prior outcome lessons for prompt injection."""
+        self._resolve_pending_entries(ticker)
+        context_parts = [
+            self.memory_log.get_past_context(ticker),
+            self._finance_learning_context(ticker),
+        ]
+        return "\n\n".join(part for part in context_parts if part)
+
+    def _finance_learning_context(self, ticker: str) -> str:
+        if not self.config.get("finance_memory_enabled"):
+            return ""
+        try:
+            from tradingagents.integrations.finance_mcp_adapter import (
+                get_finance_learning_context,
+            )
+
+            result = get_finance_learning_context(
+                self.config,
+                symbol=ticker,
+                as_of_date=self.config.get("analysis_as_of_date"),
+            )
+            if result.get("ok"):
+                return str((result.get("data") or {}).get("context") or "")
+            logger.warning("Finance learning context failed: %s", result.get("error"))
+        except Exception as exc:  # noqa: BLE001 - finance lab must fail open
+            logger.warning("Finance learning context failed: %s", exc)
+        return ""
+
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock") -> str:
         """Resolve ticker identity once and return the full instrument context.
 
@@ -329,9 +361,8 @@ class TradingAgentsGraph:
         successful node on a subsequent invocation with the same ticker+date.
         """
         self.ticker = company_name
-
-        # Resolve any pending memory-log entries for this ticker before the pipeline runs.
-        self._resolve_pending_entries(company_name)
+        self.config["analysis_as_of_date"] = str(trade_date)
+        set_config(self.config)
 
         # Recompile with a checkpointer if the user opted in.
         if self.config.get("checkpoint_enabled"):
@@ -363,7 +394,7 @@ class TradingAgentsGraph:
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM and the
         # deterministically resolved instrument identity for all agents.
-        past_context = self.memory_log.get_past_context(company_name)
+        past_context = self.prepare_past_context(company_name)
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
@@ -407,6 +438,7 @@ class TradingAgentsGraph:
             trade_date=trade_date,
             final_trade_decision=final_state["final_trade_decision"],
         )
+        self._save_finance_memory_decision(company_name, trade_date, final_state)
 
         # Clear checkpoint on successful completion to avoid stale state.
         if self.config.get("checkpoint_enabled"):
@@ -415,6 +447,32 @@ class TradingAgentsGraph:
             )
 
         return final_state, self.process_signal(final_state["final_trade_decision"])
+
+    def _save_finance_memory_decision(self, company_name, trade_date, final_state) -> None:
+        """Optionally persist the final decision to Finance Lab SQLite memory."""
+        if not self.config.get("finance_memory_enabled"):
+            return
+        try:
+            from tradingagents.integrations.finance_mcp_adapter import (
+                save_final_decision_to_finance_memory,
+            )
+
+            result = save_final_decision_to_finance_memory(
+                self.config,
+                symbol=company_name,
+                final_state=final_state,
+                trade_date=str(trade_date),
+            )
+            if not result.get("ok"):
+                logger.warning("Finance memory save failed: %s", result.get("error"))
+            elif result.get("data", {}).get("saved"):
+                logger.info(
+                    "Finance memory saved decision %s for %s",
+                    result["data"].get("decision_id"),
+                    company_name,
+                )
+        except Exception as exc:  # noqa: BLE001 - finance lab must fail open
+            logger.warning("Finance memory save failed: %s", exc)
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""

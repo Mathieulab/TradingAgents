@@ -6,10 +6,28 @@ Regressions for #988 (explicit single-vendor config still fell back to others),
 were swallowed without a trace).
 """
 import copy
+import sys
+import types
 import unittest
 from unittest import mock
 
 import pytest
+
+try:
+    import yfinance  # noqa: F401
+except ModuleNotFoundError:
+    yfinance_module = types.ModuleType("yfinance")
+    yfinance_exceptions = types.ModuleType("yfinance.exceptions")
+    yfinance_exceptions.YFRateLimitError = type("YFRateLimitError", (Exception,), {})
+    sys.modules["yfinance"] = yfinance_module
+    sys.modules["yfinance.exceptions"] = yfinance_exceptions
+
+try:
+    import stockstats  # noqa: F401
+except ModuleNotFoundError:
+    stockstats_module = types.ModuleType("stockstats")
+    stockstats_module.wrap = lambda frame: frame
+    sys.modules["stockstats"] = stockstats_module
 
 import tradingagents.dataflows.config as config_module
 import tradingagents.default_config as default_config
@@ -95,6 +113,47 @@ class VendorRoutingTests(unittest.TestCase):
         with self._route({"yfinance": _no_data, "alpha_vantage": _returns("AV_DATA")}):
             result = interface.route_to_vendor("get_stock_data", "AAPL", "2026-01-01", "2026-01-10")
         self.assertEqual(result, "AV_DATA")
+
+    def test_as_of_guard_clamps_future_end_date(self):
+        set_config({
+            "analysis_as_of_date": "2026-01-05",
+            "data_vendors": {"core_stock_apis": "yfinance"},
+        })
+        vendor = mock.Mock(return_value="AS_OF_DATA")
+        with self._route({"yfinance": vendor}):
+            result = interface.route_to_vendor(
+                "get_stock_data",
+                "AAPL",
+                "2026-01-01",
+                "2026-01-10",
+            )
+
+        self.assertEqual(result, "AS_OF_DATA")
+        vendor.assert_called_once_with("AAPL", "2026-01-01", "2026-01-05")
+
+    def test_as_of_guard_rejects_future_start_date(self):
+        set_config({
+            "analysis_as_of_date": "2026-01-05",
+            "data_vendors": {"core_stock_apis": "yfinance"},
+        })
+        vendor = mock.Mock(return_value="SHOULD_NOT_CALL")
+        with self._route({"yfinance": vendor}):
+            result = interface.route_to_vendor(
+                "get_stock_data",
+                "AAPL",
+                "2026-01-06",
+                "2026-01-10",
+            )
+
+        self.assertIn("AS_OF_DATE_VIOLATION", result)
+        vendor.assert_not_called()
+
+    def test_as_of_guard_blocks_live_only_tools_for_historical_runs(self):
+        set_config({"analysis_as_of_date": "2000-01-01"})
+
+        result = interface.route_to_vendor("get_prediction_markets", "Fed rate cut", 3)
+
+        self.assertIn("AS_OF_DATE_UNAVAILABLE", result)
 
 
 if __name__ == "__main__":

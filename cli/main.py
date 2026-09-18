@@ -1,4 +1,4 @@
-import datetime
+﻿import datetime
 import os
 import time
 from collections import deque
@@ -19,6 +19,16 @@ from rich.table import Table
 from rich.text import Text
 
 from cli.announcements import display_announcements, fetch_announcements
+from cli.decision_summary import (
+    build_decision_summary,
+    render_decision_summary_markdown,
+)
+from cli.finance_backtest import (
+    format_money,
+    format_percent,
+    parse_horizons,
+    run_configured_finance_backtest,
+)
 from cli.stats_handler import StatsCallbackHandler
 from cli.utils import (
     ask_anthropic_effort,
@@ -48,6 +58,10 @@ from tradingagents.graph.analyst_execution import (
     sync_analyst_tracker_from_chunk,
 )
 from tradingagents.graph.trading_graph import TradingAgentsGraph
+from tradingagents.integrations.finance_mcp_adapter import (
+    save_decision_replay_to_finance_memory,
+    save_final_decision_to_finance_memory,
+)
 
 console = Console()
 
@@ -276,7 +290,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["header"].update(
         Panel(
             "[bold green]Welcome to TradingAgents CLI[/bold green]\n"
-            "[dim]© [Tauric Research](https://github.com/TauricResearch)[/dim]",
+        "[dim]Tauric Research (https://github.com/TauricResearch)[/dim]",
             title="Welcome to TradingAgents",
             border_style="green",
             padding=(1, 2),
@@ -355,7 +369,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             progress_table.add_row("", agent, status_cell)
 
         # Add horizontal line after each team
-        progress_table.add_row("─" * 20, "─" * 20, "─" * 20, style="dim")
+            progress_table.add_section()
 
     layout["progress"].update(
         Panel(progress_table, title="Progress", border_style="cyan", padding=(1, 2))
@@ -478,7 +492,7 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["footer"].update(Panel(stats_table, border_style="grey50"))
 
 
-def get_user_selections():
+def get_user_selections(*, ftmo=False, symbol="EURUSD"):
     """Get all user selections before starting the analysis display."""
     # Display ASCII art welcome message
     with open(Path(__file__).parent / "static" / "welcome.txt", encoding="utf-8") as f:
@@ -488,7 +502,7 @@ def get_user_selections():
     welcome_content = f"{welcome_ascii}\n"
     welcome_content += "[bold green]TradingAgents: Multi-Agents LLM Financial Trading Framework - CLI[/bold green]\n\n"
     welcome_content += "[bold]Workflow Steps:[/bold]\n"
-    welcome_content += "I. Analyst Team → II. Research Team → III. Trader → IV. Risk Management → V. Portfolio Management\n\n"
+    welcome_content += "I. Analyst Team -> II. Research Team -> III. Trader -> IV. Risk Management -> V. Portfolio Management\n\n"
     welcome_content += (
         "[dim]Built by [Tauric Research](https://github.com/TauricResearch)[/dim]"
     )
@@ -506,7 +520,7 @@ def get_user_selections():
     console.print()  # Add vertical space before announcements
 
     # Fetch and display announcements (silent on failure)
-    announcements = fetch_announcements()
+    announcements = None if ftmo else fetch_announcements()
     display_announcements(console, announcements)
 
     # Create a boxed questionnaire for each step
@@ -518,38 +532,43 @@ def get_user_selections():
         return Panel(box_content, border_style="blue", padding=(1, 2))
 
     # Step 1: Ticker symbol
-    console.print(
-        create_question_box(
-            "Step 1: Ticker Symbol",
-            "Enter the ticker, with exchange suffix when needed (e.g. SPY, 0700.HK, BTC-USD)",
-            "SPY",
+    if ftmo:
+        console.print(Panel(f"{symbol} | H4 swing / M15 market data | Shadow only | No orders",
+                            title="FTMO Swing", border_style="green"))
+    else:
+        console.print(
+            create_question_box(
+                "Step 1: Ticker Symbol",
+                "Enter the ticker, with exchange suffix when needed (e.g. SPY, 0700.HK, BTC-USD)",
+                "SPY",
+            )
         )
-    )
-    selected_ticker = get_ticker()
-    asset_type = detect_asset_type(selected_ticker)
+    selected_ticker = symbol if ftmo else get_ticker()
+    asset_type = None if ftmo else detect_asset_type(selected_ticker)
     # Only announce when it's not the default stock path, to avoid printing
     # "stock" on every run.
-    if asset_type.value != "stock":
+    if asset_type is not None and asset_type.value != "stock":
         console.print(
             f"[green]Detected asset type:[/green] {asset_type.value}"
         )
 
     # Step 2: Analysis date
     default_date = datetime.datetime.now().strftime("%Y-%m-%d")
-    console.print(
-        create_question_box(
-            "Step 2: Analysis Date",
-            "Enter the analysis date (YYYY-MM-DD)",
-            default_date,
+    if not ftmo:
+        console.print(
+            create_question_box(
+                "Step 2: Analysis Date",
+                "Enter the analysis date (YYYY-MM-DD)",
+                default_date,
+            )
         )
-    )
-    analysis_date = get_analysis_date()
+    analysis_date = default_date if ftmo else get_analysis_date()
 
     # Step 3: Output language (skipped when set via TRADINGAGENTS_OUTPUT_LANGUAGE)
-    if os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
+    if not ftmo and os.environ.get("TRADINGAGENTS_OUTPUT_LANGUAGE"):
         output_language = DEFAULT_CONFIG["output_language"]
         console.print(
-            f"[green]✓ Output language from environment:[/green] {output_language}"
+            f"[green]Output language from environment:[/green] {output_language}"
         )
     else:
         console.print(
@@ -563,10 +582,16 @@ def get_user_selections():
     # Step 4: Select analysts
     console.print(
         create_question_box(
-            "Step 4: Analysts Team", "Select your LLM analyst agents for the analysis"
+            "Step 4: Analysts Team",
+            "Market, News/Macro and Sentiment; full research, trading and risk teams"
+            if ftmo else "Select your LLM analyst agents for the analysis"
         )
     )
-    selected_analysts = select_analysts(asset_type)
+    if ftmo:
+        from cli.models import AnalystType
+        selected_analysts = [AnalystType.MARKET, AnalystType.NEWS, AnalystType.SOCIAL]
+    else:
+        selected_analysts = select_analysts(asset_type)
     console.print(
         f"[green]Selected analysts:[/green] {', '.join(analyst.value for analyst in selected_analysts)}"
     )
@@ -581,16 +606,16 @@ def get_user_selections():
 
     # Step 6: LLM Provider (skipped when set via TRADINGAGENTS_LLM_PROVIDER).
     # The backend URL comes from TRADINGAGENTS_LLM_BACKEND_URL when set,
-    # otherwise the provider's default endpoint — the same value the menu
+    # otherwise the provider's default endpoint, the same value the menu
     # would have picked.
-    provider_from_env = bool(os.environ.get("TRADINGAGENTS_LLM_PROVIDER"))
+    provider_from_env = not ftmo and bool(os.environ.get("TRADINGAGENTS_LLM_PROVIDER"))
     if provider_from_env:
         selected_llm_provider = DEFAULT_CONFIG["llm_provider"].lower()
         backend_url = resolve_backend_url(
             selected_llm_provider, env_url=DEFAULT_CONFIG["backend_url"]
         )
-        console.print(f"[green]✓ LLM provider from environment:[/green] {selected_llm_provider}")
-        console.print(f"[green]✓ Backend URL:[/green] {backend_url}")
+        console.print(f"[green]LLM provider from environment:[/green] {selected_llm_provider}")
+        console.print(f"[green]Backend URL:[/green] {backend_url}")
         # Still confirm/persist the API key so the run doesn't fail later.
         ensure_api_key(selected_llm_provider)
     else:
@@ -614,7 +639,7 @@ def get_user_selections():
         # Honor an explicit env backend URL even when the provider was chosen
         # interactively, so it isn't overwritten by the menu default (#978).
         backend_url = resolve_backend_url(
-            selected_llm_provider, backend_url, env_url=DEFAULT_CONFIG["backend_url"]
+            selected_llm_provider, backend_url, env_url=None if ftmo else DEFAULT_CONFIG["backend_url"]
         )
 
         # The generic OpenAI-compatible endpoint has no default; ask for it if
@@ -625,6 +650,9 @@ def get_user_selections():
         # For Ollama, surface the resolved endpoint (OLLAMA_BASE_URL vs default)
         # before model selection so it's obvious where we're connecting.
         if selected_llm_provider == "ollama":
+            from cli.local_models import local_endpoint, prompt_local_endpoint
+            backend_url = (prompt_local_endpoint("ollama", backend_url) if ftmo
+                           else local_endpoint("ollama", backend_url))
             confirm_ollama_endpoint(backend_url)
 
         # Confirm the provider's API key is present; prompt the user to paste
@@ -633,11 +661,11 @@ def get_user_selections():
         ensure_api_key(selected_llm_provider)
 
     # Step 7: Thinking agents (skipped when either model is set via environment)
-    if os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM"):
+    if not ftmo and (os.environ.get("TRADINGAGENTS_QUICK_THINK_LLM") or os.environ.get("TRADINGAGENTS_DEEP_THINK_LLM")):
         selected_shallow_thinker = DEFAULT_CONFIG["quick_think_llm"]
         selected_deep_thinker = DEFAULT_CONFIG["deep_think_llm"]
         console.print(
-            f"[green]✓ Thinking agents from environment:[/green] "
+            f"[green]Thinking agents from environment:[/green] "
             f"quick={selected_shallow_thinker}, deep={selected_deep_thinker}"
         )
     else:
@@ -646,8 +674,8 @@ def get_user_selections():
                 "Step 7: Thinking Agents", "Select your thinking agents for analysis"
             )
         )
-        selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider)
-        selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider)
+        selected_shallow_thinker = select_shallow_thinking_agent(selected_llm_provider, backend_url)
+        selected_deep_thinker = select_deep_thinking_agent(selected_llm_provider, backend_url)
 
     # Step 8: Provider-specific thinking configuration
     thinking_level = None
@@ -689,7 +717,7 @@ def get_user_selections():
 
     return {
         "ticker": selected_ticker,
-        "asset_type": asset_type.value,
+        "asset_type": "forex" if ftmo else asset_type.value,
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
@@ -727,6 +755,12 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     """Save complete analysis report to disk with organized subfolders."""
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
+
+    decision_summary = build_decision_summary(final_state)
+    if decision_summary:
+        summary_markdown = render_decision_summary_markdown(decision_summary)
+        (save_path / "decision_summary.md").write_text(summary_markdown, encoding="utf-8")
+        sections.append(summary_markdown)
 
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
@@ -817,6 +851,7 @@ def display_complete_report(final_state):
     """Display the complete analysis report sequentially (avoids truncation)."""
     console.print()
     console.print(Rule("Complete Analysis Report", style="bold green"))
+    display_decision_summary(final_state)
 
     # I. Analyst Team Reports
     analysts = []
@@ -872,6 +907,282 @@ def display_complete_report(final_state):
         if risk.get("judge_decision"):
             console.print(Panel("[bold]V. Portfolio Manager Decision[/bold]", border_style="green"))
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
+
+
+def display_decision_summary(final_state):
+    """Display the compact final decision summary when available."""
+    decision_summary = build_decision_summary(final_state)
+    if not decision_summary:
+        return
+    console.print(
+        Panel(
+            Markdown(render_decision_summary_markdown(decision_summary)),
+            title="Decision Summary",
+            border_style="green",
+            padding=(1, 2),
+        )
+    )
+
+
+def save_finance_memory_decision(config, ticker: str, analysis_date: str, final_state):
+    """Persist the final decision to Finance Lab memory when enabled."""
+    result = save_final_decision_to_finance_memory(
+        config,
+        symbol=ticker,
+        final_state=final_state,
+        trade_date=analysis_date,
+    )
+    if not config.get("finance_memory_enabled"):
+        return
+    if result and result.get("ok") and (result.get("data") or {}).get("saved"):
+        decision_id = result["data"].get("decision_id")
+        console.print(f"[dim]Finance Lab memory: saved decision #{decision_id}.[/dim]")
+    elif result and not result.get("ok"):
+        console.print(f"[yellow]Finance Lab memory save skipped: {result.get('error')}[/yellow]")
+    return result
+
+
+def save_finance_replay_outcome(config, memory_result, backtest_result):
+    """Attach decision-replay outcomes to the saved Finance Lab decision."""
+    if not config.get("finance_memory_enabled"):
+        return None
+    if not memory_result or not memory_result.get("ok"):
+        return None
+    decision_id = (memory_result.get("data") or {}).get("decision_id")
+    if not decision_id:
+        return None
+    if not backtest_result or not backtest_result.get("ok"):
+        return None
+    data = backtest_result.get("data") or {}
+    if data.get("mode") != "decision_replay":
+        return None
+
+    result = save_decision_replay_to_finance_memory(
+        config,
+        decision_id=int(decision_id),
+        replay_result=backtest_result,
+    )
+    if result and result.get("ok") and (result.get("data") or {}).get("saved"):
+        saved_horizons = result["data"].get("saved_horizons", 0)
+        console.print(
+            f"[dim]Finance Lab memory: saved replay outcome for decision "
+            f"#{decision_id} ({saved_horizons} horizons).[/dim]"
+        )
+    elif result and not result.get("ok"):
+        console.print(f"[yellow]Finance Lab replay save skipped: {result.get('error')}[/yellow]")
+    return result
+
+
+def run_finance_backtest(config, ticker: str, analysis_date: str, final_state=None):
+    """Run the optional Finance Lab backtest after a completed CLI analysis."""
+    result = run_configured_finance_backtest(config, ticker, analysis_date, final_state)
+    display_finance_backtest_result(result)
+    return result
+
+
+def display_finance_backtest_result(result):
+    """Display a compact Finance Lab backtest result."""
+    if not result:
+        return
+    if not result.get("ok"):
+        error = result.get("error") or {}
+        message = error.get("message", "unknown error")
+        code = error.get("code", "ERROR")
+        console.print(f"[yellow]Finance Lab backtest skipped: {code} - {message}[/yellow]")
+        install_hint = (error.get("details") or {}).get("install_hint")
+        if install_hint:
+            console.print(f"[dim]{install_hint}[/dim]")
+        return
+
+    data = result.get("data") or {}
+    if data.get("mode") == "decision_replay":
+        display_decision_replay_backtest_result(data)
+        return
+
+    metrics = data.get("metrics") or {}
+    meta = result.get("meta") or {}
+    table = Table(box=box.SIMPLE_HEAVY, show_header=False)
+    table.add_column("Metric", style="bold cyan")
+    table.add_column("Value")
+    table.add_row("Backend", str(meta.get("backend", "simple")))
+    table.add_row("Strategy", str(data.get("strategy_name", meta.get("strategy_name", ""))))
+    table.add_row("Final equity", format_money(metrics.get("final_equity")))
+    table.add_row("Total return", format_percent(metrics.get("total_return")))
+    table.add_row("Max drawdown", format_percent(metrics.get("max_drawdown")))
+    table.add_row("Trades", str(metrics.get("trade_count", "")))
+    table.add_row("Win rate", format_percent(metrics.get("win_rate")))
+    console.print(Panel(table, title="Finance Lab Backtest", border_style="cyan", padding=(1, 2)))
+
+
+def display_decision_replay_backtest_result(data):
+    """Display decision-replay metrics across forward horizons."""
+    overview = Table(box=box.SIMPLE_HEAVY, show_header=False)
+    overview.add_column("Field", style="bold cyan")
+    overview.add_column("Value")
+    overview.add_row("Mode", "decision_replay")
+    overview.add_row("Status", str(data.get("status", "unknown")))
+    overview.add_row("Action", str(data.get("action", "")))
+    overview.add_row("Rating", str(data.get("rating", "")))
+    entry_date = data.get("entry_date") or "pending"
+    overview.add_row("Entry", f"{entry_date} @ {format_money(data.get('entry_price'))}")
+    overview.add_row("Exposure After Decision", format_percent(data.get("post_decision_exposure")))
+    overview.add_row("Stop Loss", format_money(data.get("stop_loss")))
+    overview.add_row("Benchmark", str(data.get("benchmark_symbol") or "n/a"))
+    summary = data.get("summary") or {}
+    evaluated = int(summary.get("evaluated_horizons") or 0)
+    if evaluated:
+        overview.add_row("Evaluated Horizons", str(evaluated))
+        overview.add_row("Avg Decision Return", format_percent(summary.get("average_decision_return")))
+        overview.add_row("Avg Alpha vs Hold", format_percent(summary.get("average_alpha_vs_buy_hold")))
+        overview.add_row("Avg Alpha vs Bench", format_percent(summary.get("average_alpha_vs_benchmark")))
+        overview.add_row(
+            "Positive vs Hold",
+            f"{summary.get('positive_alpha_vs_buy_hold', 0)}/{evaluated}",
+        )
+        overview.add_row(
+            "Positive Returns",
+            f"{summary.get('positive_decision_returns', 0)}/{evaluated}",
+        )
+        if summary.get("worst_asset_max_drawdown") is not None:
+            overview.add_row("Worst Drawdown", format_percent(summary.get("worst_asset_max_drawdown")))
+        if summary.get("best_decision_return_horizon"):
+            overview.add_row("Best Return Horizon", f"{summary['best_decision_return_horizon']}d")
+        if summary.get("worst_decision_return_horizon"):
+            overview.add_row("Worst Return Horizon", f"{summary['worst_decision_return_horizon']}d")
+    benchmark_note = data.get("benchmark_warning") or data.get("benchmark_error")
+    if benchmark_note:
+        overview.add_row("Benchmark Note", str(benchmark_note)[:100])
+
+    horizons = data.get("horizons") or []
+    pending_horizons = data.get("pending_horizons", [])
+    if pending_horizons:
+        pending = ", ".join(str(h) for h in pending_horizons)
+        overview.add_row("Pending Horizons", pending)
+    if not horizons:
+        reason = data.get("pending_reason") or "not enough forward data yet"
+        overview.add_row("Replay Note", str(reason))
+        console.print(
+            Panel(
+                overview,
+                title="Finance Lab Decision Replay",
+                border_style="cyan",
+                padding=(1, 2),
+            )
+        )
+        display_trade_style_fit(data.get("trade_style_fit") or {})
+        display_paper_trade_gate(data.get("paper_trade_gate") or {})
+        display_decision_replay_learning(data.get("learning") or {})
+        return
+
+    table = Table(box=box.SIMPLE_HEAVY)
+    table.add_column("Horizon", justify="right")
+    table.add_column("Exit")
+    table.add_column("Decision", justify="right")
+    table.add_column("Buy/Hold", justify="right")
+    table.add_column("Benchmark", justify="right")
+    table.add_column("Alpha vs Hold", justify="right")
+    table.add_column("Alpha vs Bench", justify="right")
+    table.add_column("Max DD", justify="right")
+    table.add_column("Stop")
+    for row in horizons:
+        table.add_row(
+            f"{row['horizon_days']}d",
+            str(row.get("exit_date", "")),
+            format_percent(row.get("decision_return")),
+            format_percent(row.get("buy_hold_return")),
+            format_percent(row.get("benchmark_return")),
+            format_percent(row.get("alpha_vs_buy_hold")),
+            format_percent(row.get("alpha_vs_benchmark")),
+            format_percent(row.get("asset_max_drawdown")),
+            "hit" if row.get("stop_hit") else "-",
+        )
+    console.print(Panel(overview, title="Finance Lab Decision Replay", border_style="cyan", padding=(1, 2)))
+    console.print(Panel(table, title="Forward Horizons", border_style="cyan", padding=(1, 2)))
+    display_trade_style_fit(data.get("trade_style_fit") or {})
+    display_paper_trade_gate(data.get("paper_trade_gate") or {})
+    display_decision_replay_learning(data.get("learning") or {})
+
+
+def display_trade_style_fit(style_fit):
+    """Display trade-style fit scores from decision replay."""
+    if not style_fit:
+        return
+    styles = style_fit.get("styles") or []
+    if not styles:
+        return
+
+    table = Table(box=box.SIMPLE_HEAVY)
+    table.add_column("Style")
+    table.add_column("Data")
+    table.add_column("Horizons")
+    table.add_column("Decision", justify="right")
+    table.add_column("Alpha Hold", justify="right")
+    table.add_column("Alpha Bench", justify="right")
+    table.add_column("Max DD", justify="right")
+    table.add_column("Fit")
+    for row in styles:
+        horizons = row.get("evaluated_horizons") or row.get("configured_horizons") or []
+        table.add_row(
+            str(row.get("label") or row.get("style") or ""),
+            f"{row.get('data_kind', '')}/{row.get('interval', '')}",
+            ",".join(str(h) for h in horizons) if horizons else "-",
+            format_percent(row.get("average_decision_return")),
+            format_percent(row.get("average_alpha_vs_buy_hold")),
+            format_percent(row.get("average_alpha_vs_benchmark")),
+            format_percent(row.get("worst_asset_max_drawdown")),
+            str(row.get("fit") or row.get("status") or ""),
+        )
+
+    note = style_fit.get("summary") or ""
+    if any(row.get("status") == "dataset_required" for row in styles):
+        note = f"{note} Intraday styles need CSV, Alpaca, or Polygon/Massive minute bars.".strip()
+    console.print(Panel(table, title="Trade Style Fit", subtitle=note, border_style="cyan", padding=(1, 2)))
+
+
+def display_paper_trade_gate(gate):
+    """Display the conservative pre-execution paper trade gate."""
+    if not gate:
+        return
+
+    table = Table(box=box.SIMPLE_HEAVY, show_header=False)
+    table.add_column("Field", style="bold cyan")
+    table.add_column("Value")
+    table.add_row("Candidate", str(gate.get("candidate", "no")).upper())
+    table.add_row("Execution Intent", str(gate.get("execution_intent", "skip")))
+    table.add_row("Best Style", str(gate.get("best_label") or "n/a"))
+    table.add_row("Position Size", format_percent(gate.get("position_size")))
+    table.add_row("Stop Loss", format_money(gate.get("stop_loss")))
+    table.add_row("Manual Approval", "required" if gate.get("requires_manual_approval") else "not allowed")
+    failed = gate.get("failed_rules") or []
+    warnings = gate.get("warnings") or []
+    if failed:
+        table.add_row("Failed Rules", ", ".join(str(rule) for rule in failed))
+    if warnings:
+        table.add_row("Warnings", ", ".join(str(warning) for warning in warnings))
+    reasons = gate.get("reasons") or []
+    if reasons:
+        table.add_row("Reason", " ".join(str(reason) for reason in reasons[:3]))
+
+    border = "green" if gate.get("candidate") == "yes" else "yellow"
+    if gate.get("candidate") == "no":
+        border = "red"
+    console.print(Panel(table, title="Paper Trade Gate", border_style=border, padding=(1, 2)))
+
+
+def display_decision_replay_learning(learning):
+    """Display deterministic learning points from replayed outcomes."""
+    if not learning:
+        return
+    table = Table(box=box.SIMPLE_HEAVY, show_header=False)
+    table.add_column("Field", style="bold cyan")
+    table.add_column("Value")
+    table.add_row("Verdict", str(learning.get("verdict") or "n/a"))
+    lessons = learning.get("lessons") or []
+    for index, lesson in enumerate(lessons[:4], start=1):
+        table.add_row(f"Lesson {index}", str(lesson))
+    if learning.get("next_prompt"):
+        table.add_row("Next Prompt", str(learning["next_prompt"]))
+    console.print(Panel(table, title="Outcome Learning", border_style="magenta", padding=(1, 2)))
 
 
 def update_research_team_status(status):
@@ -1037,6 +1348,7 @@ def run_analysis(checkpoint: bool = False):
     config["anthropic_effort"] = selections.get("anthropic_effort")
     config["output_language"] = selections.get("output_language", "English")
     config["checkpoint_enabled"] = checkpoint
+    config["analysis_as_of_date"] = selections["analysis_date"]
 
     # Create stats callback handler for tracking LLM/tool calls
     stats_handler = StatsCallbackHandler()
@@ -1151,10 +1463,12 @@ def run_analysis(checkpoint: bool = False):
         instrument_context = graph.resolve_instrument_context(
             selections["ticker"], selections["asset_type"]
         )
+        past_context = graph.prepare_past_context(selections["ticker"])
         init_agent_state = graph.propagator.create_initial_state(
             selections["ticker"],
             selections["analysis_date"],
             asset_type=selections["asset_type"],
+            past_context=past_context,
             instrument_context=instrument_context,
         )
         # Pass callbacks to graph config for tool execution tracking
@@ -1290,6 +1604,20 @@ def run_analysis(checkpoint: bool = False):
     # Post-analysis prompts (outside Live context for clean interaction)
     console.print("\n[bold cyan]Analysis Complete![/bold cyan]\n")
     console.print(f"[dim]{analyst_wall_time_tracker.format_summary()}[/dim]")
+    display_decision_summary(final_state)
+    memory_result = save_finance_memory_decision(
+        config,
+        selections["ticker"],
+        selections["analysis_date"],
+        final_state,
+    )
+    backtest_result = run_finance_backtest(
+        config,
+        selections["ticker"],
+        selections["analysis_date"],
+        final_state,
+    )
+    save_finance_replay_outcome(config, memory_result, backtest_result)
 
     # Prompt to save report
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
@@ -1303,7 +1631,7 @@ def run_analysis(checkpoint: bool = False):
         save_path = Path(save_path_str)
         try:
             report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
-            console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
+            console.print(f"\n[green]Report saved to:[/green] {save_path.resolve()}")
             console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
@@ -1312,6 +1640,42 @@ def run_analysis(checkpoint: bool = False):
     display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
     if display_choice in ("Y", "YES", ""):
         display_complete_report(final_state)
+
+
+@app.callback(invoke_without_command=True)
+def launch(
+    ctx: typer.Context,
+    checkpoint: bool = typer.Option(False, "--checkpoint", help="Checkpoint the standard research workflow."),
+    clear_checkpoints: bool = typer.Option(False, "--clear-checkpoints", help="Clear standard research checkpoints."),
+):
+    """Choose research or FTMO swing from the same TradingAgents launcher."""
+    if ctx.invoked_subcommand is not None:
+        return
+    if checkpoint or clear_checkpoints:
+        analyze(checkpoint=checkpoint, clear_checkpoints=clear_checkpoints)
+        return
+    import questionary
+
+    workflow = questionary.select(
+        "TradingAgents workspace:",
+        choices=[
+            questionary.Choice("Market research (stocks / ETFs / crypto)", value="research"),
+            questionary.Choice("FTMO swing (real data / shadow / replay)", value="ftmo"),
+            questionary.Choice("Exit", value="exit"),
+        ],
+    ).ask()
+    if workflow == "research":
+        run_analysis()
+    elif workflow == "ftmo":
+        ftmo()
+
+
+@app.command()
+def ftmo():
+    """Guided FTMO swing workspace using the complete TradingAgents pipeline."""
+    from cli.ftmo import run_ftmo_workspace
+
+    run_ftmo_workspace()
 
 
 @app.command()

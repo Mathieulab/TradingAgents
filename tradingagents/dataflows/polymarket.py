@@ -85,18 +85,24 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
     try:
         data = _request("public-search", {"q": topic, "limit_per_type": 20})
     except requests.RequestException as e:
-        logger.warning("Polymarket search failed for %r: %s", topic, e)
+        logger.debug("Polymarket search failed for %r: %s", topic, e)
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        reason = f"HTTP {status}" if status else type(e).__name__
         return (
-            f"Polymarket data is currently unavailable (network error: {e}). "
+            f"Polymarket data is currently unavailable ({reason}). "
             f"Proceed without prediction-market signal for '{topic}'."
         )
+
+    if not isinstance(data, dict) or not isinstance(data.get("events"), list):
+        return "Polymarket data is currently unavailable (invalid or empty API response). No prediction-market signal."
 
     now = datetime.now(timezone.utc)
     candidates = [
         m
         for event in data.get("events", [])
-        for m in event.get("markets", [])
-        if _is_forward_looking(m, now)
+        if isinstance(event, dict) and isinstance(event.get("markets"), list)
+        for m in event["markets"]
+        if isinstance(m, dict) and _is_forward_looking(m, now)
     ]
     candidates.sort(key=lambda m: m.get("volumeNum") or 0, reverse=True)
 
@@ -120,7 +126,7 @@ def get_prediction_markets(topic: str, limit: int | None = None) -> str:
         outcomes = _parse_json_list(m.get("outcomes"))
         try:
             prob = float(prices[0])
-        except (ValueError, IndexError):
+        except (ValueError, TypeError, IndexError):
             continue
         label = outcomes[0] if outcomes else "Yes"
         volume = m.get("volumeNum") or 0

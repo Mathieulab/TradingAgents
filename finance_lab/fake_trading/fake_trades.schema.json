@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Finance Lab Fake Trade",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "fake_trader_id",
+    "ticker",
+    "asset_type",
+    "strategy_name",
+    "analysis_date",
+    "decision",
+    "confidence",
+    "risk_score",
+    "status"
+  ],
+  "properties": {
+    "fake_trader_id": { "type": "string" },
+    "ticker": { "type": "string" },
+    "asset_type": { "type": "string", "enum": ["stock", "crypto", "etf", "forex", "future", "other"] },
+    "strategy_name": { "type": "string" },
+    "analysis_date": { "type": "string", "format": "date" },
+    "decision": { "type": "string", "enum": ["BUY", "HOLD", "SELL"] },
+    "confidence": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "risk_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+    "entry_price": { "type": ["number", "null"] },
+    "exit_price": { "type": ["number", "null"] },
+    "stop_loss": { "type": ["number", "null"] },
+    "take_profit": { "type": ["number", "null"] },
+    "open_date": { "type": ["string", "null"], "format": "date" },
+    "close_date": { "type": ["string", "null"], "format": "date" },
+    "status": { "type": "string", "enum": ["planned", "open", "closed", "cancelled"] },
+    "pnl_absolute": { "type": ["number", "null"] },
+    "pnl_percent": { "type": ["number", "null"] },
+    "fees": { "type": ["number", "null"], "minimum": 0.0 },
+    "slippage": { "type": ["number", "null"], "minimum": 0.0 },
+    "reason_for_entry": { "type": ["string", "null"] },
+    "reason_for_exit": { "type": ["string", "null"] },
+    "llm_summary": { "type": ["string", "null"] },
+    "mistakes_detected_later": { "type": ["string", "null"] },
+    "lesson_learned": { "type": ["string", "null"] }
+  }
+}

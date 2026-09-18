@@ -12,6 +12,9 @@ from tradingagents.agents.utils.agent_utils import (
 def create_market_analyst(llm):
 
     def market_analyst_node(state):
+        if state.get("astra_snapshot"):
+            from tradingagents.integrations.astra_context import analyze_snapshot
+            return analyze_snapshot(llm, state, "Market Analyst", "market_report")
         current_date = state["trade_date"]
         instrument_context = get_instrument_context_from_state(state)
 

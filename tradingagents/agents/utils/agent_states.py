@@ -1,3 +1,4 @@
+import operator
 from typing import Annotated
 
 from langgraph.graph import MessagesState
@@ -45,6 +46,11 @@ class RiskDebateState(TypedDict):
 
 
 class AgentState(MessagesState):
+    astra_snapshot: dict
+    astra_trace: Annotated[list[str], operator.add]
+    astra_trader_proposal: dict
+    astra_proposal: dict
+    astra_proposal_error: str | None
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]

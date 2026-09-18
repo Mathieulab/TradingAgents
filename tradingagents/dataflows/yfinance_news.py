@@ -13,16 +13,18 @@ from .stockstats_utils import yf_retry
 def _extract_article_data(article: dict) -> dict:
     """Extract article data from yfinance news format (handles nested 'content' structure)."""
     # Handle nested content structure
-    if "content" in article:
+    article = article if isinstance(article, dict) else {}
+    if isinstance(article.get("content"), dict):
         content = article["content"]
         title = content.get("title", "No title")
         summary = content.get("summary", "")
-        provider = content.get("provider", {})
+        provider = content.get("provider")
+        provider = provider if isinstance(provider, dict) else {}
         publisher = provider.get("displayName", "Unknown")
 
         # Get URL from canonicalUrl or clickThroughUrl
         url_obj = content.get("canonicalUrl") or content.get("clickThroughUrl") or {}
-        link = url_obj.get("url", "")
+        link = url_obj.get("url", "") if isinstance(url_obj, dict) else ""
 
         # Get publish date
         pub_date_str = content.get("pubDate", "")
@@ -103,6 +105,8 @@ def get_news_yfinance(
 
         for article in news:
             data = _extract_article_data(article)
+            if not data["title"] or data["title"] == "No title":
+                continue
 
             # Keep only articles within the requested window (look-ahead safe).
             if not _in_news_window(data["pub_date"], start_dt, end_dt):
@@ -164,11 +168,8 @@ def get_global_news_yfinance(
             if search.news:
                 for article in search.news:
                     # Handle both flat and nested structures
-                    if "content" in article:
-                        data = _extract_article_data(article)
-                        title = data["title"]
-                    else:
-                        title = article.get("title", "")
+                    data = _extract_article_data(article)
+                    title = data["title"] if data["title"] != "No title" else ""
 
                     # Deduplicate by title
                     if title and title not in seen_titles:

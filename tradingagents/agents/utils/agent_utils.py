@@ -153,6 +153,8 @@ def build_instrument_context(
             details.append(f"Industry: {industry}")
         if identity.get("exchange"):
             details.append(f"Exchange: {identity['exchange']}")
+        if identity.get("quote_type"):
+            details.append(f"Quote type: {identity['quote_type']}")
 
     if details:
         context += (
@@ -161,6 +163,13 @@ def build_instrument_context(
             "result explicitly disproves this resolved identity."
         )
 
+    if identity and identity.get("quote_type", "").upper() in {"ETF", "MUTUALFUND"}:
+        context += (
+            " This is a fund, not an operating company. Company balance sheets, cashflow "
+            "and income statements are not applicable; do not request them or treat their "
+            "absence as a data outage or a bearish signal. Assess mandate, underlying "
+            "exposures, fund fees, liquidity and tracking only when evidence is available."
+        )
     if is_crypto:
         context += (
             " Treat it as a crypto asset rather than a company, and do not "

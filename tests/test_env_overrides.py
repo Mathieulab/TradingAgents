@@ -96,3 +96,34 @@ def test_unknown_env_var_is_ignored(monkeypatch):
         TRADINGAGENTS_NONEXISTENT_KEY="oops",
     )
     assert "nonexistent_key" not in dc.DEFAULT_CONFIG
+
+
+def test_finance_backtest_env_overrides(monkeypatch):
+    dc = _reload_with_env(
+        monkeypatch,
+        TRADINGAGENTS_FINANCE_BACKTEST_ENABLED="true",
+        TRADINGAGENTS_FINANCE_BACKTEST_MODE="decision_replay",
+        TRADINGAGENTS_FINANCE_BACKTEST_BACKEND="nautilus",
+        TRADINGAGENTS_FINANCE_BACKTEST_STRATEGY="ema_cross",
+        TRADINGAGENTS_FINANCE_BACKTEST_BENCHMARK="QQQ",
+        TRADINGAGENTS_FINANCE_BACKTEST_HORIZONS="5,20",
+        TRADINGAGENTS_FINANCE_BACKTEST_LOOKBACK_DAYS="90",
+        TRADINGAGENTS_FINANCE_BACKTEST_INITIAL_CASH="25000.5",
+        TRADINGAGENTS_FINANCE_BACKTEST_FAST_PERIOD="5",
+        TRADINGAGENTS_FINANCE_BACKTEST_SLOW_PERIOD="20",
+        TRADINGAGENTS_FINANCE_BACKTEST_FEE_BPS="1.5",
+        TRADINGAGENTS_FINANCE_BACKTEST_SLIPPAGE_BPS="2.5",
+    )
+
+    assert dc.DEFAULT_CONFIG["finance_backtest_enabled"] is True
+    assert dc.DEFAULT_CONFIG["finance_backtest_mode"] == "decision_replay"
+    assert dc.DEFAULT_CONFIG["finance_backtest_backend"] == "nautilus"
+    assert dc.DEFAULT_CONFIG["finance_backtest_strategy"] == "ema_cross"
+    assert dc.DEFAULT_CONFIG["finance_backtest_benchmark"] == "QQQ"
+    assert dc.DEFAULT_CONFIG["finance_backtest_horizons"] == "5,20"
+    assert dc.DEFAULT_CONFIG["finance_backtest_lookback_days"] == 90
+    assert dc.DEFAULT_CONFIG["finance_backtest_initial_cash"] == 25000.5
+    assert dc.DEFAULT_CONFIG["finance_backtest_fast_period"] == 5
+    assert dc.DEFAULT_CONFIG["finance_backtest_slow_period"] == 20
+    assert dc.DEFAULT_CONFIG["finance_backtest_fee_bps"] == 1.5
+    assert dc.DEFAULT_CONFIG["finance_backtest_slippage_bps"] == 2.5

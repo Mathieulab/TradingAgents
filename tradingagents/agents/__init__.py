@@ -1,20 +1,33 @@
-from .analysts.fundamentals_analyst import create_fundamentals_analyst
-from .analysts.market_analyst import create_market_analyst
-from .analysts.news_analyst import create_news_analyst
-from .analysts.sentiment_analyst import (
-    create_sentiment_analyst,
-    create_social_media_analyst,  # deprecated alias kept for back-compat
-)
-from .managers.portfolio_manager import create_portfolio_manager
-from .managers.research_manager import create_research_manager
-from .researchers.bear_researcher import create_bear_researcher
-from .researchers.bull_researcher import create_bull_researcher
-from .risk_mgmt.aggressive_debator import create_aggressive_debator
-from .risk_mgmt.conservative_debator import create_conservative_debator
-from .risk_mgmt.neutral_debator import create_neutral_debator
-from .trader.trader import create_trader
-from .utils.agent_states import AgentState, InvestDebateState, RiskDebateState
-from .utils.agent_utils import create_msg_delete
+"""Lazy public exports for agent factory helpers.
+
+Keeping these imports lazy lets lightweight utility modules under
+``tradingagents.agents`` be imported without requiring the full LangChain graph
+dependency stack.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+
+_EXPORTS = {
+    "AgentState": ".utils.agent_states",
+    "InvestDebateState": ".utils.agent_states",
+    "RiskDebateState": ".utils.agent_states",
+    "create_msg_delete": ".utils.agent_utils",
+    "create_bear_researcher": ".researchers.bear_researcher",
+    "create_bull_researcher": ".researchers.bull_researcher",
+    "create_research_manager": ".managers.research_manager",
+    "create_fundamentals_analyst": ".analysts.fundamentals_analyst",
+    "create_market_analyst": ".analysts.market_analyst",
+    "create_neutral_debator": ".risk_mgmt.neutral_debator",
+    "create_news_analyst": ".analysts.news_analyst",
+    "create_aggressive_debator": ".risk_mgmt.aggressive_debator",
+    "create_portfolio_manager": ".managers.portfolio_manager",
+    "create_conservative_debator": ".risk_mgmt.conservative_debator",
+    "create_sentiment_analyst": ".analysts.sentiment_analyst",
+    "create_social_media_analyst": ".analysts.sentiment_analyst",
+    "create_trader": ".trader.trader",
+}
 
 __all__ = [
     "AgentState",
@@ -32,6 +45,15 @@ __all__ = [
     "create_portfolio_manager",
     "create_conservative_debator",
     "create_sentiment_analyst",
-    "create_social_media_analyst",  # deprecated; will be removed in a future version
+    "create_social_media_analyst",
     "create_trader",
 ]
+
+
+def __getattr__(name: str):
+    if name not in _EXPORTS:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    module = import_module(_EXPORTS[name], __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value

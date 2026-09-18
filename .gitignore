@@ -149,8 +149,24 @@ activemq-data/
 
 # Environments
 .env
+.env.*
+!.env.example
+!.env.enterprise.example
 .envrc
 .venv
+.venv-ftmo/
+.venv-astra/
+.astra.json
+results/
+.serena/
+finance_lab/config/finance_lab.local.yaml
+finance_lab/reports/
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+*.db
+*.db-*
 env/
 venv/
 ENV/

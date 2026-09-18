@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 from .alpha_vantage import (
     get_balance_sheet as get_alpha_vantage_balance_sheet,
@@ -31,6 +32,23 @@ from .y_finance import (
 from .yfinance_news import get_global_news_yfinance, get_news_yfinance
 
 logger = logging.getLogger(__name__)
+
+_DATE_ARG_POSITIONS = {
+    "get_stock_data": {"start_date": 1, "end_date": 2},
+    "get_indicators": {"curr_date": 2},
+    "get_fundamentals": {"curr_date": 1},
+    "get_balance_sheet": {"curr_date": 2},
+    "get_cashflow": {"curr_date": 2},
+    "get_income_statement": {"curr_date": 2},
+    "get_news": {"start_date": 1, "end_date": 2},
+    "get_global_news": {"curr_date": 0},
+    "get_macro_indicators": {"curr_date": 1},
+}
+
+_LIVE_ONLY_HISTORICAL_METHODS = {
+    "get_insider_transactions",
+    "get_prediction_markets",
+}
 
 # Tools organized by category
 TOOLS_CATEGORIES = {
@@ -160,6 +178,11 @@ def get_vendor(category: str, method: str = None) -> str:
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
+    as_of_result = _apply_as_of_guard(method, args, kwargs)
+    if isinstance(as_of_result, str):
+        return as_of_result
+    args, kwargs = as_of_result
+
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]
@@ -245,3 +268,82 @@ def route_to_vendor(method: str, *args, **kwargs):
         raise first_error
 
     raise RuntimeError(f"No available vendor for '{method}'")
+
+
+def _apply_as_of_guard(
+    method: str,
+    args: tuple,
+    kwargs: dict,
+) -> tuple[tuple, dict] | str:
+    config = get_config()
+    if not config.get("strict_as_of_date", True):
+        return args, kwargs
+
+    as_of = _parse_iso_date(config.get("analysis_as_of_date"))
+    if as_of is None:
+        return args, kwargs
+
+    if method in _LIVE_ONLY_HISTORICAL_METHODS and as_of < date.today():
+        return (
+            f"AS_OF_DATE_UNAVAILABLE: The tool '{method}' is live-only and cannot "
+            f"be used for an honest historical analysis as of {as_of.isoformat()}. "
+            "Do not infer or fabricate historical values from today's data."
+        )
+
+    date_positions = _DATE_ARG_POSITIONS.get(method)
+    if not date_positions:
+        return args, kwargs
+
+    mutable_args = list(args)
+    changed: list[str] = []
+    for name, position in date_positions.items():
+        if name == "start_date":
+            continue
+        raw_value = _arg_value(mutable_args, kwargs, name, position)
+        value = _parse_iso_date(raw_value)
+        if value is None or value <= as_of:
+            continue
+        _set_arg_value(mutable_args, kwargs, name, position, as_of.isoformat())
+        changed.append(f"{name}={raw_value}->{as_of.isoformat()}")
+
+    if "start_date" in date_positions:
+        start = _parse_iso_date(_arg_value(mutable_args, kwargs, "start_date", date_positions["start_date"]))
+        if start is not None and start > as_of:
+            return (
+                f"AS_OF_DATE_VIOLATION: Requested start_date {start.isoformat()} "
+                f"is after the analysis date {as_of.isoformat()}. No honest "
+                "historical data is available for that future window."
+            )
+
+    if changed:
+        logger.info(
+            "Clamped %s tool date(s) to analysis_as_of_date=%s: %s",
+            method,
+            as_of.isoformat(),
+            ", ".join(changed),
+        )
+    return tuple(mutable_args), kwargs
+
+
+def _arg_value(args: list, kwargs: dict, name: str, position: int):
+    if name in kwargs:
+        return kwargs[name]
+    if position < len(args):
+        return args[position]
+    return None
+
+
+def _set_arg_value(args: list, kwargs: dict, name: str, position: int, value: str) -> None:
+    if name in kwargs or position >= len(args):
+        kwargs[name] = value
+    else:
+        args[position] = value
+
+
+def _parse_iso_date(value) -> date | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return date.fromisoformat(value.strip()[:10])
+    except ValueError:
+        return None

@@ -1,8 +1,15 @@
+import os
 from typing import Annotated
 
 from langchain_core.tools import tool
 
+from tradingagents.dataflows.errors import VendorNotConfiguredError
 from tradingagents.dataflows.interface import route_to_vendor
+
+
+def macro_indicators_available() -> bool:
+    """Return whether FRED-backed macro tools should be exposed to agents."""
+    return bool(os.getenv("FRED_API_KEY"))
 
 
 @tool
@@ -33,4 +40,11 @@ def get_macro_indicators(
     Returns:
         str: A formatted markdown report of the macro series
     """
-    return route_to_vendor("get_macro_indicators", indicator, curr_date, look_back_days)
+    try:
+        return route_to_vendor("get_macro_indicators", indicator, curr_date, look_back_days)
+    except VendorNotConfiguredError as exc:
+        return (
+            "MACRO_DATA_UNAVAILABLE: The configured macro data vendor is not available. "
+            f"{exc} Continue the analysis without this macro series and do not fabricate "
+            "FRED values."
+        )

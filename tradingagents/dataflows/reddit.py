@@ -94,6 +94,7 @@ def _fetch_subreddit_rss(
     limit: int,
     timeout: float,
     _retry: bool = True,
+    failures: list[str] | None = None,
 ) -> list[dict]:
     """Default path: parse the public Atom search feed for a subreddit.
 
@@ -115,10 +116,14 @@ def _fetch_subreddit_rss(
                 sub, ticker, wait,
             )
             time.sleep(wait)
-            return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
+            return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False, failures=failures)
+        if failures is not None:
+            failures.append(f"r/{sub}: HTTP {exc.code}")
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
         return []
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:
+        if failures is not None:
+            failures.append(f"r/{sub}: {type(exc).__name__}")
         # OSError covers URLError/TimeoutError/connection resets; HTTPException
         # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
@@ -176,6 +181,7 @@ def _fetch_subreddit(
     sub: str,
     limit: int,
     timeout: float,
+    failures: list[str] | None = None,
 ) -> list[dict]:
     """Fetch one subreddit, RSS-first.
 
@@ -183,6 +189,8 @@ def _fetch_subreddit(
     so we go straight to the RSS feed — which serves our identified User-Agent
     reliably — halving our request volume against Reddit's per-IP rate limit.
     """
+    if failures is not None:
+        return _fetch_subreddit_rss(ticker, sub, limit, timeout, failures=failures)
     return _fetch_subreddit_rss(ticker, sub, limit, timeout)
 
 
@@ -202,12 +210,17 @@ def fetch_reddit_posts(
     """
     blocks = []
     total_posts = 0
+    failures = []
     for i, sub in enumerate(subreddits):
         if i > 0:
             time.sleep(inter_request_delay)
-        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
+        failure_count = len(failures)
+        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout, failures=failures)
         total_posts += len(posts)
         if not posts:
+            if len(failures) > failure_count:
+                blocks.append(f"{failures[-1]}; Reddit evidence unavailable, not neutral sentiment.")
+                continue
             blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
             continue
 
@@ -238,6 +251,8 @@ def fetch_reddit_posts(
         blocks.append("\n".join(lines))
 
     if total_posts == 0:
+        if failures:
+            return "Reddit data unavailable: " + "; ".join(failures) + ". No sentiment signal can be inferred."
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"

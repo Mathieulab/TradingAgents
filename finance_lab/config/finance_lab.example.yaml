@@ -1,0 +1,21 @@
+llm:
+  provider: ollama
+  base_url: http://localhost:11434/v1
+  deep_think_model: qwen3-coder:30b-a3b-q4_K_M
+  quick_think_model: qwen3:8b
+  temperature: 0.0
+
+mode:
+  real_trading_enabled: false
+  paper_trading_enabled: true
+  backtesting_enabled: true
+
+memory:
+  enabled: true
+  storage: sqlite
+  path: ./finance_lab/fake_trading/fake_trades.db
+
+risk:
+  max_position_size_percent: 5
+  max_daily_loss_percent: 2
+  require_human_approval: true

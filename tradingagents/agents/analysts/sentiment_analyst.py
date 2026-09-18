@@ -58,6 +58,10 @@ def create_sentiment_analyst(llm):
     structured_llm = bind_structured(llm, SentimentReport, "Sentiment Analyst")
 
     def sentiment_analyst_node(state):
+        if state.get("astra_snapshot"):
+            from tradingagents.integrations.astra_context import analyze_snapshot
+            return analyze_snapshot(llm, state, "Sentiment Analyst", "sentiment_report",
+                                    structured=structured_llm, render=render_sentiment_report)
         ticker = state["company_of_interest"]
         end_date = state["trade_date"]
         start_date = _seven_days_back(end_date)

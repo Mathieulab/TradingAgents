@@ -289,7 +289,7 @@ def _prompt_custom_model_id() -> str:
     return _require_text("Enter model ID:", "Please enter a model ID.")
 
 
-def _select_model(provider: str, mode: str) -> str:
+def _select_model(provider: str, mode: str, backend_url: str | None = None) -> str:
     """Select a model for the given provider and mode (quick/deep)."""
     if provider.lower() == "openrouter":
         return select_openrouter_model(mode)
@@ -300,11 +300,33 @@ def _select_model(provider: str, mode: str) -> str:
             "Please enter a deployment name.",
         )
 
+    options = get_model_options(provider, mode)
+    if mode == "quick":
+        console.print("Analysis model: analysts, bull/bear researchers, trader and risk debaters.")
+    else:
+        console.print("Reasoning model: research manager and portfolio manager.")
+    if provider.lower() in {"ollama", "openai_compatible"}:
+        import requests
+
+        from cli.local_models import discover_models
+
+        endpoint = backend_url or provider_default_url(provider)
+        if endpoint:
+            try:
+                discovered = discover_models(provider.lower(), endpoint)
+                if discovered:
+                    options = discovered + [("Custom model ID", "custom")]
+                else:
+                    console.print("No models found on this server. Start or load a model before analysis.", style="yellow")
+                    options = [("Custom model ID", "custom")]
+            except (requests.RequestException, ValueError, TypeError):
+                console.print("Model discovery unavailable. These are suggested IDs; verify the server and exact model tag.", style="yellow")
+
     choice = questionary.select(
         f"Select Your [{mode.title()}-Thinking LLM Engine]:",
         choices=[
             questionary.Choice(display, value=value)
-            for display, value in get_model_options(provider, mode)
+            for display, value in options
         ],
         instruction="\n- Use arrow keys to navigate\n- Press Enter to select",
         style=questionary.Style(
@@ -326,14 +348,14 @@ def _select_model(provider: str, mode: str) -> str:
     return choice
 
 
-def select_shallow_thinking_agent(provider) -> str:
+def select_shallow_thinking_agent(provider, backend_url=None) -> str:
     """Select shallow thinking llm engine using an interactive selection."""
-    return _select_model(provider, "quick")
+    return _select_model(provider, "quick", backend_url)
 
 
-def select_deep_thinking_agent(provider) -> str:
+def select_deep_thinking_agent(provider, backend_url=None) -> str:
     """Select deep thinking llm engine using an interactive selection."""
-    return _select_model(provider, "deep")
+    return _select_model(provider, "deep", backend_url)
 
 def _llm_provider_table() -> list[tuple[str, str, str | None]]:
     """(display_name, provider_key, base_url) for every supported provider.
@@ -390,16 +412,9 @@ def resolve_backend_url(
 
 def prompt_openai_compatible_url() -> str:
     """Prompt for a custom OpenAI-compatible endpoint base URL."""
-    url = questionary.text(
-        "Enter the OpenAI-compatible base URL "
-        "(e.g. http://localhost:8000/v1 for vLLM, http://localhost:1234/v1 for LM Studio):",
-        validate=lambda x: x.strip().startswith(("http://", "https://"))
-        or "Enter a URL starting with http:// or https://",
-    ).ask()
-    if not url:
-        console.print("\n[red]No endpoint URL provided. Exiting...[/red]")
-        exit(1)
-    return url.strip()
+    from cli.local_models import prompt_local_endpoint
+
+    return prompt_local_endpoint("openai_compatible", "http://localhost:8000/v1")
 
 
 def select_llm_provider() -> tuple[str, str | None]:

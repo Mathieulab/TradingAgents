@@ -25,6 +25,15 @@ def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
+        if state.get("astra_snapshot"):
+            from finance_lab.astra.catalog import canonical
+            from tradingagents.integrations.astra_context import swing_proposal
+            proposal, error = swing_proposal(llm, state, "Portfolio Manager")
+            decision = canonical(proposal)
+            return {"risk_debate_state": {**state["risk_debate_state"], "judge_decision": decision,
+                                          "latest_speaker": "Judge"},
+                    "final_trade_decision": decision, "astra_proposal": proposal,
+                    "astra_proposal_error": error}
         instrument_context = get_instrument_context_from_state(state)
 
         history = state["risk_debate_state"]["history"]
